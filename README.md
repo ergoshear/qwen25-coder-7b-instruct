@@ -1,74 +1,49 @@
-# Autocomplete Worker (mlops-node-2.lan): Qwen2.5-Coder-7B-Instruct
+# Qwen2.5-Coder-7B-Instruct on mlops-node-2.lan
 
-This node serves low-latency fill-in-the-middle autocomplete. Its target GPU
-is an NVIDIA RTX 3080 Ti with 12 GB GDDR6X. This repository currently builds a
-CUDA `llama.cpp` server with a Q8_0 GGUF model, rather than the FP8 vLLM
-configuration in the supplied cluster specification. The Dockerfile currently
-targets NVIDIA Ada (compute capability 8.9), while the RTX 3080 Ti is Ampere
-(8.6); rebuild for architecture 86 before using this image on that node. The
-host must provide a working NVIDIA driver and NVIDIA Container Toolkit.
+This image serves an FP8 checkpoint with vLLM 0.30.0 on the RTX 3080 Ti (CUDA
+compute capability 8.6). It provides an OpenAI-compatible API on port 8000.
 
-## Model and context
+## Model and runtime
 
-- Model: [`ggml-org/Qwen2.5-Coder-7B-Instruct-Q8_0-GGUF`](https://huggingface.co/ggml-org/Qwen2.5-Coder-7B-Instruct-Q8_0-GGUF),
-  `qwen2.5-coder-7b-instruct-q8_0.gguf` (about 8.1 GB). This Q8_0 GGUF keeps
-  the high precision intent of the original FP8 setup. The downloader pins the
-  Hugging Face revision on first use, resumes partial downloads, and verifies
-  the file against its LFS SHA256. Set `MODEL_REVISION` to a full commit SHA on
-  the first download to select a specific revision; use a new volume to change
-  the saved revision.
-- The server defaults to an 8,192-token context and one parallel slot. The
-  model's Q8_0 weights need about 8.1 GB before the KV cache and runtime
-  buffers, so a 12 GB GPU may need a smaller context or fewer GPU layers. The
-  server startup log reports actual GPU allocation.
-- Runtime settings can be changed without rebuilding the image using
-  `GPU_LAYERS`, `CTX_SIZE`, `PARALLEL`, `THREADS`, `BATCH_SIZE`,
-  `UBATCH_SIZE`, `FLASH_ATTN`, `TEMP`, `TOP_P`, and `TOP_K`.
+- Checkpoint: [RedHatAI/Qwen2.5-Coder-7B-Instruct-FP8-dynamic](https://huggingface.co/RedHatAI/Qwen2.5-Coder-7B-Instruct-FP8-dynamic).
+  The proposed `Qwen/Qwen2.5-Coder-7B-Instruct-FP8` repository was not
+  available, so this published quantization of the same instruction model is
+  used instead.
+- vLLM detects the checkpoint's quantization configuration. On Ampere,
+  vLLM documents weight-only W8A16 execution through FP8 Marlin; native
+  FP8 W8A8 requires a newer GPU. Verify the selected kernel in the startup log.
+- Default context: 8,192 tokens. `MAX_MODEL_LEN` and
+  `GPU_MEMORY_UTILIZATION` override runtime defaults.
+- The downloader saves the complete Hugging Face revision on first use in
+  `/models/model-source.json`. Set `MODEL_REVISION` to a full commit SHA on
+  the first download. Use a fresh volume to change it.
 
-## Build and download
+The model and KV cache must fit in 12 GB. If vLLM rejects the requested
+capacity, lower `MAX_MODEL_LEN` or `GPU_MEMORY_UTILIZATION` and test latency
+on the target host. The image has not been run there yet.
 
-Run from the repository root. These examples use Podman; Docker can use the
-same commands.
+## Build and run
+
+Run these commands on the target Linux node. The GitHub workflow builds the
+same image on an x86-64 runner.
 
 ```sh
-podman build --format docker -t qwen25-coder-7b-instruct-ada .
-podman volume create qwen25-coder-7b-instruct-model
-podman run --rm --gpus all \
-  -v qwen25-coder-7b-instruct-model:/models \
-  --entrypoint /usr/local/bin/download-model \
-  qwen25-coder-7b-instruct-ada
+docker build -t qwen25-coder-7b-instruct .
+docker volume create qwen25-coder-7b-model
+docker run --rm -v qwen25-coder-7b-model:/models \
+  --entrypoint /usr/local/bin/download-model qwen25-coder-7b-instruct
+docker run --rm --gpus all --shm-size 8g \
+  -v qwen25-coder-7b-model:/models:ro \
+  -p 127.0.0.1:8000:8000 qwen25-coder-7b-instruct
 ```
 
-The public model does not need a token. For authenticated downloads, pass
-`HF_TOKEN` or `HUGGINGFACE_API_KEY` only to the download container. Model files
-are stored in the named volume, not in the image or repository. Keep at least
-10 GB free for the model volume.
-
-## Run the server
+The host needs a working NVIDIA driver and NVIDIA Container Toolkit. Pass
+`HF_TOKEN` only to the download command if access is restricted.
 
 ```sh
-podman run -d --name qwen25-coder-7b-instruct \
-  --gpus all --shm-size 8g \
-  -v qwen25-coder-7b-instruct-model:/models:ro \
-  -p 127.0.0.1:8080:8080 \
-  qwen25-coder-7b-instruct-ada
-podman logs -f qwen25-coder-7b-instruct
+curl -fsS http://127.0.0.1:8000/health
+curl -fsS http://127.0.0.1:8000/v1/models
 ```
 
-Keep the API bound to loopback as shown. If it must be reachable remotely, put
-it behind an authenticated TLS proxy.
-
-Check readiness and make a small request after the model has loaded:
-
-```sh
-curl -fsS http://127.0.0.1:8080/health
-curl -fsS http://127.0.0.1:8080/v1/chat/completions \
-  -H 'Content-Type: application/json' \
-  -d '{"model":"qwen2.5-coder-7b-instruct","messages":[{"role":"user","content":"Write a Python function that returns the first n Fibonacci numbers."}],"max_tokens":128,"temperature":0}'
-```
-
-## Validation status
-
-The image has not been built or run on the target host. Confirm that the host
-GPU supports compute capability 8.9 and verify model loading and a chat request
-before relying on the service.
+Kubernetes manifests are staged in `gitops/apps/qwen25-coder-7b-instruct/`
+and are not included in the active GitOps app list yet.
