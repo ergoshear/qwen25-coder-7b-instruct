@@ -1,9 +1,12 @@
-# Qwen2.5-Coder-7B-Instruct Q8_0 on NVIDIA Ada
+# Autocomplete Worker (mlops-node-2.lan): Qwen2.5-Coder-7B-Instruct
 
-This repository builds a CUDA `llama.cpp` server image for NVIDIA Ada GPUs
-(compute capability 8.9). The host must have a working NVIDIA driver and
-NVIDIA Container Toolkit configured for Docker or Podman. The container
-provides CUDA user space; it does not install the host driver.
+This node serves low-latency fill-in-the-middle autocomplete. Its target GPU
+is an NVIDIA RTX 3080 Ti with 12 GB GDDR6X. This repository currently builds a
+CUDA `llama.cpp` server with a Q8_0 GGUF model, rather than the FP8 vLLM
+configuration in the supplied cluster specification. The Dockerfile currently
+targets NVIDIA Ada (compute capability 8.9), while the RTX 3080 Ti is Ampere
+(8.6); rebuild for architecture 86 before using this image on that node. The
+host must provide a working NVIDIA driver and NVIDIA Container Toolkit.
 
 ## Model and context
 
